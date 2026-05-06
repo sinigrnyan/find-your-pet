@@ -62,9 +62,11 @@ def generate(req: GenerateRequest):
         req.vol
     )
     return result
-from fastapi.staticfiles import StaticFiles
+templates = Jinja2Templates(directory="templates")
 
-app.mount("/", StaticFiles(directory="templates", html=True), name="static")
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 @app.get("/observations")
 def get_observations():
     db = Session()
