@@ -119,6 +119,9 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     start = ox.distance.nearest_nodes(G, dolg, shir)
     tags = {"landuse": True, "natural": True, "leisure": True, "highway": True, "amenity": True}
     gdf = ox.geometries_from_point((shir, dolg), tags=tags, dist=rad)
+    for col in ["landuse", "natural", "leisure", "highway", "amenity"]:
+        if col not in gdf.columns:
+            gdf[col] = None
     walkable = gdf[
         gdf["landuse"].isin(["forest", "grass", "meadow"]) |
         gdf["natural"].isin(["wood", "grassland", "scrub"]) |
