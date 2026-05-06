@@ -8,6 +8,11 @@ from datetime import datetime
 import os
 import shutil
 import json
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
+from pydantic import BaseModel
+from map_logic import generate_map
 
 baza = declarative_base()
 engine = create_engine("sqlite:///observations.db")
@@ -40,6 +45,29 @@ app.add_middleware(
 )
 os.makedirs("photos", exist_ok=True)
 app.mount("/photos", StaticFiles(directory="photos"), name="photos")
+templates = Jinja2Templates(directory="templates")
+class GenerateRequest(BaseModel):
+    zhiv: str
+    khar: str
+    lat: float
+    lon: float
+    rad: float
+    vol: int
+
+@app.post("/generate")
+def generate(req: GenerateRequest):
+    result = generate_map(
+        req.zhiv,
+        req.khar,
+        req.lat,
+        req.lon,
+        req.rad,
+        req.vol
+    )
+    return result
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 @app.get("/observations")
 def get_observations():
     db = Session()

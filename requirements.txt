@@ -1,7 +1,4 @@
 osmnx==1.9.1
-math
-random
-collections
 numpy
 networkx
 osmnx
@@ -16,3 +13,4 @@ sqlalchemy
 python-multipart
 pillow
 gunicorn
+pydantic
