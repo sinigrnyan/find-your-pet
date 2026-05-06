@@ -9,8 +9,6 @@ import os
 import shutil
 import json
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from fastapi import Request
 from pydantic import BaseModel
 from map_logic import generate_map
 
@@ -45,7 +43,6 @@ app.add_middleware(
 )
 os.makedirs("photos", exist_ok=True)
 app.mount("/photos", StaticFiles(directory="photos"), name="photos")
-templates = Jinja2Templates(directory="templates")
 class GenerateRequest(BaseModel):
     zhiv: str
     khar: str
@@ -65,9 +62,9 @@ def generate(req: GenerateRequest):
         req.vol
     )
     return result
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+from fastapi.staticfiles import StaticFiles
+
+app.mount("/", StaticFiles(directory="templates", html=True), name="static")
 @app.get("/observations")
 def get_observations():
     db = Session()
