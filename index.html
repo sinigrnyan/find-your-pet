@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Поиск пропавших питомцев</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+<style>
+    html, body {
+        height: 100%;
+        margin: 0;
+        font-family: Arial;
+    }
+    #map {
+        height: 100%;
+        width: 100%;
+    }
+    .panel {
+        position: absolute;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(240,240,240,0.95);
+        padding: 10px 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+    }
+    .help {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 260px;
+        background: rgba(255,255,255,0.95);
+        padding: 10px;
+        border-radius: 10px;
+        font-size: 13px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+    }
+</style>
+</head>
+
+<body>
+<div class="panel">
+    Тип животного:
+    <select id="zhiv">
+        <option value="koshka">Кошка</option>
+        <option value="sobaka">Собака</option>
+    </select>
+
+    Характер:
+    <select id="khar">
+        <option value="truslivaya">Трусливая</option>
+        <option value="uverennaya">Уверенная</option>
+    </select>
+    Радиус:
+    <input id="rad" value="700">
+    Волонтёры:
+    <input id="vol" value="3">
+    <button onclick="generate()">Построить маршруты</button>
+    <br><br>
+    Координаты:<br>
+    Шир.: <input id="lat_input">
+    Долг.: <input id="lon_input">
+    <br><br>
+    <span id="coords">Кликни по карте</span>
+    <button onclick="saveRoute()">Сохранить маршрут</button>
+    <button onclick="loadRoute()">Загрузить маршрут</button>
+</div>
+
+<div id="map"></div>
+
+<script>
+const SERVER = ""; 
+let selectedLat = null;
+let selectedLon = null;
+let heatLayer = null;
+let routesLayer = null;
+let markersLayer = null;
+var map = L.map('map').setView([59.8814, 29.8301], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OpenStreetMap'}).addTo(map);
+setTimeout(() => {map.invalidateSize();}, 200);
+map.on("click", function(e) {
+    selectedLat = e.latlng.lat;
+    selectedLon = e.latlng.lng;
+    document.getElementById("coords").innerText =
+        "Шир.: " + selectedLat.toFixed(5) +
+        "Долг.: " + selectedLon.toFixed(5);
+    document.getElementById("lat_input").value = selectedLat.toFixed(6);
+    document.getElementById("lon_input").value = selectedLon.toFixed(6);
+    const html = `
+        <div>
+            <textarea id="obs_text" placeholder="Описание"></textarea><br>
+            <select id="obs_status">
+                <option value="green">🟢 Зацепка</option>
+                <option value="red">🔴 Нет</option>
+                <option value="yellow">🟡 Другое</option>
+            </select><br><br>
+            <input type="file" id="obs_photo" accept="image/*"><br><br>
+            <button onclick="submitObs(${selectedLat}, ${selectedLon})">
+                Сохранить
+            </button>
+        </div>
+    `;
+    L.popup()
+        .setLatLng(e.latlng)
+        .setContent(html)
+        .openOn(map);
+});
+
+function generate() {
+    let latField = document.getElementById("lat_input").value;
+    let lonField = document.getElementById("lon_input").value;
+    if (latField && lonField) {
+        selectedLat = parseFloat(latField);
+        selectedLon = parseFloat(lonField);
+    }
+    if (!selectedLat || !selectedLon) {
+        alert("Укажи координаты");
+        return;
+    }
+    fetch("/generate", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "ngrok-skip-browser-warning": "true"},
+        body: JSON.stringify({
+            zhiv: document.getElementById("zhiv").value,
+            khar: document.getElementById("khar").value,
+            lat: selectedLat,
+            lon: selectedLon,
+            rad: document.getElementById("rad").value,
+            vol: document.getElementById("vol").value
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        drawResult(data);
+    });
+}
+
+function loadPhotoIntoPopup(marker, url, baseContent) {
+    fetch(url, {
+        headers: {
+            "ngrok-skip-browser-warning": "true"
+        }
+    })
+    .then(r => r.blob())
+    .then(blob => {
+        let imgUrl = URL.createObjectURL(blob);
+        let content = baseContent + `<br><img src="${imgUrl}" width="200">`;
+        marker.setPopupContent(content);
+    })
+    .catch(() => {
+        marker.setPopupContent(baseContent + "<br>Ошибка загрузки фото");
+    });
+}
+
+function compressImage(file, maxSizeMB = 5, maxWidth = 1600) {
+    return new Promise((resolve, reject) => {
+        let img = new Image();
+        let reader = new FileReader();
+        reader.onload = function(e) {
+            img.src = e.target.result;
+        };
+        img.onload = function() {
+            let canvas = document.createElement("canvas");
+            let ctx = canvas.getContext("2d");
+            let scale = Math.min(1, maxWidth / img.width);
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            let quality = 0.8;
+            function tryCompress() {
+                canvas.toBlob(blob => {
+                    if (!blob) return reject("Ошибка сжатия");
+                    if (blob.size <= maxSizeMB * 1024 * 1024 || quality < 0.4) {
+                        resolve(blob);
+                    } else {
+                        quality -= 0.1;
+                        tryCompress();
+                    }
+                }, "image/jpeg", quality);
+            }
+            tryCompress();
+        };
+        reader.readAsDataURL(file);
+    });
+}
+function loadObservations() {
+    if (markersLayer) map.removeLayer(markersLayer);
+    markersLayer = L.layerGroup().addTo(map);
+    fetch(SERVER + "/observations", {
+        headers: {
+            "ngrok-skip-browser-warning": "true"
+        },
+    })
+    .then(r => r.json())
+    .then(data => {
+        data.forEach(o => {
+            let color = "red";
+            if (o.status === "green") color = "green";
+            else if (o.status === "yellow") color = "orange";
+            let popup = `<b>${o.created_at}</b><br>${o.text || ""}`;
+            let marker = L.circleMarker([o.lat, o.lon], {
+                radius: 10,
+                color: "black",
+                weight: 2,
+                fillColor: color,
+                fillOpacity: 1,
+                zIndexOffset: 10000
+            })
+            .addTo(markersLayer);
+            marker.bindPopup("Загрузка...");
+            marker.on("popupopen", function() {
+                let popup = `<b>${o.created_at}</b><br>${o.text || ""}`;
+                if (o.photo_url) {
+                    popup += `<br><i>Загрузка фото...</i>`;
+                }
+                marker.setPopupContent(popup);
+                if (o.photo_url) {
+                    loadPhotoIntoPopup(marker, SERVER + o.photo_url, popup);
+                }
+            });
+        });
+
+    });
+}
+
+async function submitObs(lat, lon) {
+    let text = document.getElementById("obs_text").value;
+    let status = document.getElementById("obs_status").value;
+    let fileInput = document.getElementById("obs_photo");
+    let form = new FormData();
+    form.append("lat", lat);
+    form.append("lon", lon);
+    form.append("text", text);
+    form.append("status", status);
+    if (fileInput.files.length > 0) {
+        let file = fileInput.files[0];
+        if (file.size > 5 * 1024 * 1024) {
+            file = await compressImage(file);
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            alert("Файл слишком большой даже после сжатия (>5MB)");
+            return;
+        }
+        form.append("photo", file, "photo.jpg");
+    }
+    fetch(SERVER + "/observations", {
+        headers: {
+            "ngrok-skip-browser-warning": "true"
+        },
+        method: "POST",
+        body: form
+    })
+    .then(() => {
+        loadObservations();
+        map.closePopup();
+    });
+}
+
+function saveRoute() {
+    let name = prompt("Название маршрута:");
+    if (!name) return;
+    let form = new FormData();
+    form.append("name", name);
+    form.append("data", JSON.stringify(lastRoutes));
+    fetch(SERVER + "/routes", {
+        headers: {
+            "ngrok-skip-browser-warning": "true"
+        },
+        method: "POST",
+        body: form
+    })
+    .then(r => r.json())
+    .then(res => alert("ID = " + res.id));
+}
+
+function loadRoute() {
+    let id = prompt("ID маршрута:");
+    if (!id) return;
+    fetch(SERVER + "/routes/" + id,{
+        headers: {
+            "ngrok-skip-browser-warning": "true"
+        },
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            alert("Не найдено");
+            return;
+        }
+        drawRoutes(data.data);
+    });
+}
+
+function drawRoutes(routes) {
+    if (routesLayer) map.removeLayer(routesLayer);
+    routesLayer = L.layerGroup().addTo(map);
+    let colors = ["red","blue","green","purple","orange"];
+    routes.forEach((route, i) => {
+        L.polyline(route, {
+            color: "white",
+            weight: 8,
+            opacity: 0.7
+        }).addTo(routesLayer);
+
+        L.polyline(route, {
+            color: colors[i % colors.length],
+            weight: 4,
+            opacity: 1
+        }).addTo(routesLayer);
+    });
+    routesLayer.bringToFront();
+}
+
+function drawResult(data) {
+    if (heatLayer) map.removeLayer(heatLayer);
+    if (routesLayer) map.removeLayer(routesLayer);
+    if (markersLayer) map.removeLayer(markersLayer);
+    heatLayer = L.layerGroup().addTo(map);
+    routesLayer = L.layerGroup().addTo(map);
+    markersLayer = L.layerGroup().addTo(map);
+    let heatPoints = data.heat.map(p => [p[0], p[1], p[2]]);
+    heatLayer = L.heatLayer(heatPoints, {
+        radius: 25,
+        blur: 15
+    }).addTo(map);
+    data.top_points.forEach((p, i) => {
+        L.marker([p[0], p[1]])
+            .addTo(markersLayer)
+            .bindPopup("Priority #" + (i+1));
+    });
+    L.marker(data.start)
+        .addTo(markersLayer)
+        .bindPopup("Последняя точка");
+    let colors = ["red","blue","green","purple","orange"];
+    data.routes.forEach((route, i) => {
+        if (!route.length) return;
+        L.polyline(route, {
+            color: "white",
+            weight: 8,
+            opacity: 0.7
+        }).addTo(routesLayer);
+        L.polyline(route, {
+            color: colors[i % colors.length],
+            weight: 4,
+            opacity: 1
+        }).addTo(routesLayer);
+    });
+    map.setView(data.start, 14);
+    window.lastRoutes = data.routes;
+    routesLayer.bringToFront();
+    markersLayer.bringToFront();
+}
+loadObservations();
+
+</script>
+</body>
+<div class="help">
+<b>Как пользоваться:</b><br><br>
+1. Клик по карте — выбор точки<br>
+2. В точке можно добавить наблюдение <br>
+или нажать кнопку"построить" для построения маршрутов поиска<br>
+3. Клик по наблюдениям — посмотреть сообщение/фото<br>
+4. Сохраняй уже построенные маршруты и делись ID с другими волонтёрам 
+</div>
+</html>
