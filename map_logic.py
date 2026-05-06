@@ -320,7 +320,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             popup=f"Priority #{i+1}, p={w:.2f}",
             icon=folium.Icon(color="black", icon="star")
         ).add_to(m)
-    serv = "https://40b0-35-203-149-68.ngrok-free.app"
+    # serv = "https://40b0-35-203-149-68.ngrok-free.app"
     rex = []
 
     for put in marsh:

@@ -18,3 +18,4 @@ py -m pip install uvicorn
 py -m pip install sqlalchemy
 py -m pip install python-multipart
 py -m pip install pillow
+py -m pip install gunicorn
