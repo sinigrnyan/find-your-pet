@@ -11,6 +11,8 @@ import json
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from map_logic import generate_map
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
 
 baza = declarative_base()
 engine = create_engine("sqlite:///observations.db")
