@@ -11,7 +11,6 @@ import json
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from map_logic import generate_map
-from fastapi.templating import Jinja2Templates
 from fastapi import Request
 
 baza = declarative_base()
@@ -64,11 +63,11 @@ def generate(req: GenerateRequest):
         req.vol
     )
     return result
-templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+def index():
+    with open("index.html", encoding="utf-8") as f:
+        return f.read()
 @app.get("/observations")
 def get_observations():
     db = Session()
