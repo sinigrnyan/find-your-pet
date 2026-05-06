@@ -1,4 +1,4 @@
-%%writefile server.py
+# %%writefile server.py
 # uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
