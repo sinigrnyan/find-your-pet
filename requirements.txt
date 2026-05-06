@@ -1,0 +1,17 @@
+osmnx==1.9.1
+math
+random
+collections
+numpy
+networkx
+osmnx
+folium
+sklearn
+IPython
+flask
+shapely
+fastapi
+uvicorn
+sqlalchemy
+python-multipart
+pillow
