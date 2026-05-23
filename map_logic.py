@@ -12,6 +12,8 @@ from sklearn.cluster import KMeans
 from shapely.geometry import Point, LineString
 from shapely.ops import unary_union
 from shapely.prepared import prep
+from functools import lru_cache
+from shapely.vectorized import contains
 
 env_cache = {}
 node_cache = {}
@@ -28,6 +30,45 @@ ox.settings.headers = {
     "User-Agent": "SinigrNyan (sinigrchannel@gmail.com)",
     "Referer": "https://2072-34-80-242-236.ngrok-free.app"
 }
+@lru_cache(maxsize=16)
+def load_osm_cached(lat_key, lon_key, rad_key):
+
+    G = ox.graph_from_point(
+        (lat_key, lon_key),
+        dist=rad_key,
+        network_type="all",
+        simplify=True
+    )
+
+    G = ox.distance.add_edge_lengths(G)
+
+    tags = {
+        "landuse": True,
+        "natural": True,
+        "leisure": True,
+        "highway": True,
+        "amenity": True,
+        "building": True
+    }
+
+    gdf = ox.geometries_from_point(
+        (lat_key, lon_key),
+        tags=tags,
+        dist=rad_key
+    )
+
+    for col in [
+        "landuse",
+        "natural",
+        "leisure",
+        "highway",
+        "amenity",
+        "building"
+    ]:
+        if col not in gdf.columns:
+            gdf[col] = None
+
+    return G, gdf
 
 def generate_map(zhiv, khar, shir, dolg, rad, vol):
     global env_cache, node_cache
@@ -45,20 +86,32 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         lon = dolg + x / (111320.0 * math.cos(math.radians(shir)))
         lat = shir + y / 111320.0
         return lat, lon
-    
+
     def is_valid(x, y):
-        lat, lon = to_latlon(x, y)
-        p = Point(lon, lat)
-        if blocked_union and blocked_union.contains(p):
+
+        idx = grid_index(x, y)
+
+        if idx is None:
             return False
-        return True
+
+        gx, gy = idx
+
+        return free_mask[gy, gx] == 1
 
     def is_path_valid(x1, y1, x2, y2):
-        lat1, lon1 = to_latlon(x1, y1)
-        lat2, lon2 = to_latlon(x2, y2)
-        line = LineString([(lon1, lat1), (lon2, lat2)])
-        if blocked_union and blocked_union.intersects(line):
-            return False
+
+        steps = 8
+
+        for i in range(steps + 1):
+
+            t = i / steps
+
+            x = x1 + (x2 - x1) * t
+            y = y1 + (y2 - y1) * t
+
+            if not is_valid(x, y):
+                return False
+
         return True
 
     def mestnost(x, y, golod, stress):
@@ -114,11 +167,17 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             return (best[0], best[1]), best[2]
         return pos, predugl
     start_xy = to_xy(shir, dolg)
-    G = ox.graph_from_point((shir, dolg), dist=rad, network_type="all", simplify=True)
-    G = ox.distance.add_edge_lengths(G)
+    lat_key = round(shir, 3)
+    lon_key = round(dolg, 3)
+    rad_key = int(rad)
+
+    G, gdf = load_osm_cached(
+        lat_key,
+        lon_key,
+        rad_key
+    )
+
     start = ox.distance.nearest_nodes(G, dolg, shir)
-    tags = {"landuse": True, "natural": True, "leisure": True, "highway": True, "amenity": True}
-    gdf = ox.geometries_from_point((shir, dolg), tags=tags, dist=rad)
     for col in ["landuse", "natural", "leisure", "highway", "amenity"]:
         if col not in gdf.columns:
             gdf[col] = None
@@ -145,6 +204,47 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     res_union = prep(res_geom) if res_geom else None
     parking_union = prep(parking_geom) if parking_geom else None
     roads_union = prep(roads_geom) if roads_geom else None
+    GRID_RES = 6.0
+
+    xmin = -rad
+    xmax = rad
+    ymin = -rad
+    ymax = rad
+
+    xs = np.arange(xmin, xmax, GRID_RES)
+    ys = np.arange(ymin, ymax, GRID_RES)
+
+    xx, yy = np.meshgrid(xs, ys)
+
+    lon_grid = dolg + xx / (111320.0 * math.cos(math.radians(shir)))
+    lat_grid = shir + yy / 111320.0
+
+    free_mask = np.ones(xx.shape, dtype=np.uint8)
+
+    if blocked_geom:
+        blocked_mask = contains(
+            blocked_geom,
+            lon_grid,
+            lat_grid
+        )
+
+        free_mask[blocked_mask] = 0
+
+    def grid_index(x, y):
+
+        gx = int((x - xmin) / GRID_RES)
+        gy = int((y - ymin) / GRID_RES)
+
+        if gx < 0 or gy < 0:
+            return None
+
+        if gx >= free_mask.shape[1]:
+            return None
+
+        if gy >= free_mask.shape[0]:
+            return None
+
+        return gx, gy
     vis = []
     t_global = 0
     GOLOD_MAX = 1.0
