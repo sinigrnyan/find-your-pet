@@ -89,6 +89,13 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
     def is_valid(x, y):
 
+        # --- круговое ограничение ---
+
+        dist_from_center = math.hypot(x, y)
+
+        if dist_from_center > rad:
+            return False
+
         idx = grid_index(x, y)
 
         if idx is None:
@@ -100,7 +107,9 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
     def is_path_valid(x1, y1, x2, y2):
 
-        steps = 8
+        dist = math.hypot(x2 - x1, y2 - y1)
+
+        steps = max(10, int(dist / 5))
 
         for i in range(steps + 1):
 
@@ -115,57 +124,156 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         return True
 
     def mestnost(x, y, golod, stress):
-        key = (int(x//10), int(y//10), int(golod*10), int(stress*10))
+
+        idx = grid_index(x, y)
+
+        if idx is None:
+            return 0.0
+
+        gx, gy = idx
+
+        key = (
+            gx,
+            gy,
+            int(golod * 10),
+            int(stress * 10)
+        )
+
         if key in env_cache:
             return env_cache[key]
-        lat, lon = to_latlon(x, y)
-        p = Point(lon, lat)
+
         score = 1.0
-        if walkable_union and walkable_union.contains(p):
+
+        if walkable_mask[gy, gx]:
             score *= 1.4 + 0.3 * stress
-        if res_union and res_union.contains(p):
+
+        if res_mask[gy, gx]:
             score *= 1.6
-        if parking_union and parking_union.contains(p):
+
+        if parking_mask[gy, gx]:
             score *= 1.2 + golod
-        if roads_union and roads_union.contains(p):
+
+        if roads_mask[gy, gx]:
             score *= max(0.3, 1.0 - stress * 1.5)
-        if blocked_geom:
-            dist = blocked_geom.distance(p)
-            if dist < 20:
-                score *= 1.5 + 0.5 * stress
+
         env_cache[key] = score
+
         return score
 
 
     def shag(pos, predugl, golod, stress, zhiv1, khar1):
+
         x, y = pos
+
         best = None
         best_score = -1
-        for _ in range(5):
+
+        ATTEMPTS = 4
+
+        for _ in range(ATTEMPTS):
+
             if zhiv1 == "koshka":
-                ugl = predugl + rng.uniform(-0.4, 0.4)
-                max_step = conf["MAX_STEP"]
+                angle_spread = 0.4
+            elif khar1 == "uverennaya":
+                angle_spread = 0.25
             else:
-                ugl = predugl + rng.uniform(-0.6, 0.6) if khar1 == "truslivaya" else predugl + rng.uniform(-0.3, 0.3)
-                max_step = conf["MAX_STEP"]
-            dist = rng.uniform(0.3 * max_step, max_step)
+                angle_spread = 0.6
+
+            ugl = predugl + rng.uniform(-angle_spread, angle_spread)
+
+            max_step = conf["MAX_STEP"]
+
+            # --- адаптивная длина шага ---
+            # чаще короткие шаги,
+            # иногда длинные прорывы
+
+            if zhiv1 == "sobaka" and khar1 == "uverennaya":
+                dist = rng.triangular(
+                    20,
+                    max_step,
+                    max_step * 0.75
+                )
+            else:
+                dist = rng.triangular(
+                    10,
+                    max_step,
+                    max_step * 0.45
+                )
+
             nx = x + dist * math.cos(ugl)
             ny = y + dist * math.sin(ugl)
-            if not is_valid(nx, ny) or not is_path_valid(x, y, nx, ny):
+
+            # --- дробная проверка длинных путей ---
+
+            if not is_valid(nx, ny):
                 continue
-            d = math.hypot(nx - start_xy[0], ny - start_xy[1])
-            kdomu = math.exp(-d / (rad * (0.6 if zhiv1 == "koshka" else 0.8)))
+
+            if not is_path_valid(x, y, nx, ny):
+                continue
+
+            d = math.hypot(
+                nx - start_xy[0],
+                ny - start_xy[1]
+            )
+
+            # --- ослабленное притяжение домой ---
+
+            if zhiv1 == "sobaka" and khar1 == "uverennaya":
+                home_scale = 3.5
+            elif zhiv1 == "sobaka":
+                home_scale = 1.8
+            elif khar1 == "uverennaya":
+                home_scale = 1.3
+            else:
+                home_scale = 0.9
+
             env = mestnost(nx, ny, golod, stress)
-            issled = 1.0 + (d / rad) * (0.3 if zhiv1 == "koshka" else 0.4)
-            golod_drive = 1.0 + golod * (0.8 if zhiv1 == "koshka" else 1.0)
-            stress_dom = 1.0 + stress * (1.2 if zhiv1 == "koshka" else 1.0)
-            score = env * kdomu * issled * golod_drive * (1 / stress_dom)
+
+            # --- исследование ---
+
+            if zhiv1 == "sobaka" and khar1 == "uverennaya":
+                explore_bonus = 2.8
+            elif zhiv1 == "sobaka":
+                explore_bonus = 1.8
+            elif khar1 == "uverennaya":
+                explore_bonus = 1.4
+            else:
+                explore_bonus = 0.7
+
+            issled = 1.0 + (d / rad) * explore_bonus
+
+            golod_drive = 1.0 + golod
+
+            score = (
+                env
+                * issled
+                * golod_drive
+            )
+
             if score > best_score:
                 best = (nx, ny, ugl)
                 best_score = score
-        if best:
-            return (best[0], best[1]), best[2]
-        return pos, predugl
+
+        # fallback:
+        # если всё заблокировано —
+        # маленький случайный шаг
+
+        if best is None:
+
+            for _ in range(20):
+
+                dist = rng.uniform(5, 20)
+                ugl = rng.uniform(0, 2 * math.pi)
+
+                nx = x + dist * math.cos(ugl)
+                ny = y + dist * math.sin(ugl)
+
+                if is_valid(nx, ny):
+                    return (nx, ny), ugl
+
+            return pos, predugl
+
+        return (best[0], best[1]), best[2]
     start_xy = to_xy(shir, dolg)
     lat_key = round(shir, 3)
     lon_key = round(dolg, 3)
@@ -220,6 +328,22 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     lat_grid = shir + yy / 111320.0
 
     free_mask = np.ones(xx.shape, dtype=np.uint8)
+    walkable_mask = np.zeros(xx.shape, dtype=np.uint8)
+    roads_mask = np.zeros(xx.shape, dtype=np.uint8)
+    res_mask = np.zeros(xx.shape, dtype=np.uint8)
+    parking_mask = np.zeros(xx.shape, dtype=np.uint8)
+
+    if walkable_geom:
+        walkable_mask[contains(walkable_geom, lon_grid, lat_grid)] = 1
+
+    if roads_geom:
+        roads_mask[contains(roads_geom, lon_grid, lat_grid)] = 1
+
+    if res_geom:
+        res_mask[contains(res_geom, lon_grid, lat_grid)] = 1
+
+    if parking_geom:
+        parking_mask[contains(parking_geom, lon_grid, lat_grid)] = 1
 
     if blocked_geom:
         blocked_mask = contains(
@@ -266,7 +390,12 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
                 golod = min(GOLOD_MAX, golod + GOLOD_GROWTH)
                 t_global = t_global + 1
                 continue
-            return_prob = min(0.85, conf["P_RETURN"] * (1 + stress*2))
+            if zhiv == "sobaka" and khar == "uverennaya":
+                return_prob = conf["P_RETURN"] * 0.15
+            elif zhiv == "sobaka":
+                return_prob = conf["P_RETURN"] * 0.5
+            else:
+                return_prob = conf["P_RETURN"] * (1 + stress * 2)
             if rng.random() < return_prob:
                 dx = start_xy[0] - cur[0]
                 dy = start_xy[1] - cur[1]
@@ -296,7 +425,31 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     for x, y, t in vis:
         if not is_valid(x, y):
             continue
-        w = (((t + 1) / T) ** 3) * (1 / (1 + ((math.hypot(x - start_xy[0], y - start_xy[1]))/ (rad * 0.4)) ** 2)) * rng.uniform(0.9, 1.1)
+        dist_from_home = math.hypot(
+            x - start_xy[0],
+            y - start_xy[1]
+        )
+
+        if zhiv == "sobaka" and khar == "uverennaya":
+
+            dist_bonus = 1.0 + (dist_from_home / rad) * 2.5
+
+        elif zhiv == "sobaka":
+
+            dist_bonus = 1.0 + (dist_from_home / rad)
+
+        else:
+
+            dist_bonus = max(
+                0.2,
+                1.0 - (dist_from_home / rad) * 0.8
+            )
+
+        w = (
+            ((t + 1) / T) ** 1.5
+            * dist_bonus
+            * rng.uniform(0.9, 1.1)
+        )
         gx = int(x // cell)
         gy = int(y // cell)
         grid[(gx, gy)] = max(grid[(gx, gy)], w)
@@ -375,7 +528,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         dist = [[float('inf')] * n for _ in range(n)]
         all_lengths = {}
         for u in komm_nodes:
-            all_lengths[u] = nx.single_source_dijkstra_path_length(G, u, weight="length")
+            all_lengths[u] = nx.single_source_dijkstra_path_length(G, u, cutoff=2500, weight="length")
         for i, u in enumerate(komm_nodes):
             for j, v in enumerate(komm_nodes):
                 if v in all_lengths[u]:
