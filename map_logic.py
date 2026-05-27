@@ -89,8 +89,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
     def is_valid(x, y):
 
-        # --- круговое ограничение ---
-
         dist_from_center = math.hypot(x, y)
 
         if dist_from_center > rad:
@@ -183,9 +181,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
             max_step = conf["MAX_STEP"]
 
-            # --- адаптивная длина шага ---
-            # чаще короткие шаги,
-            # иногда длинные прорывы
 
             if zhiv1 == "sobaka" and khar1 == "uverennaya":
                 dist = rng.triangular(
@@ -203,8 +198,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             nx = x + dist * math.cos(ugl)
             ny = y + dist * math.sin(ugl)
 
-            # --- дробная проверка длинных путей ---
-
             if not is_valid(nx, ny):
                 continue
 
@@ -215,8 +208,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
                 nx - start_xy[0],
                 ny - start_xy[1]
             )
-
-            # --- ослабленное притяжение домой ---
 
             if zhiv1 == "sobaka" and khar1 == "uverennaya":
                 home_scale = 3.5
@@ -229,7 +220,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
             env = mestnost(nx, ny, golod, stress)
 
-            # --- исследование ---
 
             if zhiv1 == "sobaka" and khar1 == "uverennaya":
                 explore_bonus = 2.8
@@ -253,11 +243,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             if score > best_score:
                 best = (nx, ny, ugl)
                 best_score = score
-
-        # fallback:
-        # если всё заблокировано —
-        # маленький случайный шаг
-
         if best is None:
 
             for _ in range(20):
