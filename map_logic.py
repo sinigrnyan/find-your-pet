@@ -14,6 +14,7 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 from functools import lru_cache
 from shapely.vectorized import contains
+from scipy.spatial.distance import cdist
 
 env_cache = {}
 node_cache = {}
@@ -527,78 +528,77 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     weights = np.array([w for _, _, w in heat])
 
     hot_threshold = np.percentile(weights, 85)
-
     och = [
-        (lat, lon, w)
+        (lat, lon, 1.0)
         for lat, lon, w in heat
         if w >= hot_threshold
     ]
-    if len(och) == 0:
-        clust = [[] for _ in range(vol)]
-    else:
-        coords = np.array(
-            [to_xy(lat, lon) for lat, lon, _ in och]
-        )
 
-        weights = np.array(
-            [w for _, _, w in och]
-        )
+    if len(och) == 0:
+
+        clust = [[] for _ in range(vol)]
+
+    else:
+
+        coords = np.array([
+            to_xy(lat, lon)
+            for lat, lon, _ in och
+        ])
 
         k = min(vol, len(coords))
-
         kmeans = KMeans(
             n_clusters=k,
-            random_state=0,
-            n_init=20
+            random_state=42,
+            n_init=30
         )
 
-        labels = kmeans.fit_predict(
-            coords,
-            sample_weight=weights
-        )
+        labels = kmeans.fit_predict(coords)
+
+        centers = kmeans.cluster_centers_
 
         clust = [[] for _ in range(k)]
 
-        for idx, lb in enumerate(labels):
-            clust[lb].append(och[idx])
-        target_size = len(och) / k
+        assigned_routes = [[] for _ in range(k)]
 
-        for _ in range(30):
+        for idx, point in enumerate(coords):
 
-            sizes = [len(c) for c in clust]
+            best_cluster = None
+            best_score = 1e18
 
-            biggest = np.argmax(sizes)
-            smallest = np.argmin(sizes)
+            for c in range(k):
 
-            if sizes[biggest] - sizes[smallest] <= 1:
-                break
-
-            center_small = np.mean(
-                [
-                    to_xy(lat, lon)
-                    for lat, lon, _ in clust[smallest]
-                ],
-                axis=0
-            )
-
-            pts = clust[biggest]
-
-            dists = []
-
-            for idx, (lat, lon, w) in enumerate(pts):
-
-                d = np.linalg.norm(
-                    np.array(to_xy(lat, lon))
-                    - center_small
+                center_dist = np.linalg.norm(
+                    point - centers[c]
                 )
 
-                dists.append((idx, d))
+                overlap_penalty = 0.0
 
-            move_idx = min(dists, key=lambda x: x[1])[0]
+                for oc in range(k):
 
-            clust[smallest].append(
-                clust[biggest].pop(move_idx)
-            )
+                    if oc == c:
+                        continue
+
+                    if len(assigned_routes[oc]) == 0:
+                        continue
+
+                    d = np.min(
+                        cdist(
+                            [point],
+                            assigned_routes[oc]
+                        )
+                    )
+
+                    overlap_penalty += 300.0 / (d + 1.0)
+
+                score = center_dist + overlap_penalty
+
+                if score < best_score:
+                    best_score = score
+                    best_cluster = c
+
+            clust[best_cluster].append(och[idx])
+
+            assigned_routes[best_cluster].append(point)
 
     marsh = [[] for _ in range(vol)]
     for agent_id, points in enumerate(clust):
@@ -645,7 +645,45 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             nodes[i]
             for i in order
         ]
-        cur = start
+        filtered_nodes = []
+
+        MIN_NODE_DIST = 120
+
+        for n in ordered_nodes:
+
+            if not filtered_nodes:
+                filtered_nodes.append(n)
+                continue
+
+            prev = filtered_nodes[-1]
+
+            d = ox.distance.great_circle_vec(
+                G.nodes[prev]["y"],
+                G.nodes[prev]["x"],
+                G.nodes[n]["y"],
+                G.nodes[n]["x"]
+            )
+
+            if d >= MIN_NODE_DIST:
+                filtered_nodes.append(n)
+
+        ordered_nodes = filtered_nodes
+        if len(node_coords) > 0:
+
+            center_x = np.mean([p[0] for p in node_coords])
+            center_y = np.mean([p[1] for p in node_coords])
+
+            start_node = ox.distance.nearest_nodes(
+                G,
+                center_x,
+                center_y
+            )
+
+            cur = start_node
+
+        else:
+
+            cur = start
 
         for target in ordered_nodes:
 
