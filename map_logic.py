@@ -18,6 +18,84 @@ from shapely.vectorized import contains
 env_cache = {}
 node_cache = {}
 cveta = ['red', 'blue', 'green', 'purple', 'orange']
+def euclid(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def greedy_tsp(points):
+    """
+    points = [(x,y), ...]
+    возвращает порядок обхода
+    """
+
+    if len(points) <= 1:
+        return list(range(len(points)))
+
+    unvisited = set(range(1, len(points)))
+    route = [0]
+    cur = 0
+
+    while unvisited:
+        nxt = min(
+            unvisited,
+            key=lambda i: euclid(points[cur], points[i])
+        )
+
+        route.append(nxt)
+        unvisited.remove(nxt)
+        cur = nxt
+
+    return route
+
+
+def route_length(route, points):
+
+    total = 0
+
+    for i in range(len(route)-1):
+        total += euclid(
+            points[route[i]],
+            points[route[i+1]]
+        )
+
+    return total
+
+
+def two_opt(route, points):
+
+    improved = True
+
+    while improved:
+
+        improved = False
+
+        best_len = route_length(route, points)
+
+        for i in range(1, len(route)-2):
+
+            for j in range(i+1, len(route)):
+
+                candidate = (
+                    route[:i]
+                    + route[i:j+1][::-1]
+                    + route[j+1:]
+                )
+
+                cand_len = route_length(
+                    candidate,
+                    points
+                )
+
+                if cand_len < best_len:
+
+                    route = candidate
+                    best_len = cand_len
+                    improved = True
+
+        if not improved:
+            break
+
+    return route
 pov = {
     ("koshka", "truslivaya"): {"P_STAY": 0.18, "P_RETURN": 0.06, "MAX_STEP": 50.0, "EDGE_SCALE": 30.0, "AVOID_MAJOR_ROADS": True},
     ("koshka", "uverennaya"): {"P_STAY": 0.08, "P_RETURN": 0.03, "MAX_STEP": 80.0, "EDGE_SCALE": 55.0, "AVOID_MAJOR_ROADS": True},
@@ -397,12 +475,6 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             vis.append((cur[0], cur[1], t_global))
             golod = min(GOLOD_MAX, golod + GOLOD_GROWTH)
             t_global = t_global + 1
-    xy = np.array([(x, y) for x, y, _ in vis])
-    if len(xy) > 0:
-        k = min(vol, len(xy))
-        labels = KMeans(n_clusters=k, random_state=0, n_init=10).fit_predict(xy)
-    else:
-        labels = []
 
     grid = defaultdict(float)
     cell = 1
@@ -452,43 +524,81 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         heat.append([lat, lon, w_norm])
         if i < 10:
             TOP_POINTS.append((lat, lon, w_norm))
-    och = []
-    for (lat, lon, w) in heat:
-        if w >= 0.03:
-            och.append((lat, lon, w))
+    weights = np.array([w for _, _, w in heat])
+
+    hot_threshold = np.percentile(weights, 85)
+
+    och = [
+        (lat, lon, w)
+        for lat, lon, w in heat
+        if w >= hot_threshold
+    ]
     if len(och) == 0:
         clust = [[] for _ in range(vol)]
     else:
-        coords = np.array([to_xy(lat, lon) for lat, lon, _ in och])
-        vesaw = np.ones(len(coords))
+        coords = np.array(
+            [to_xy(lat, lon) for lat, lon, _ in och]
+        )
+
+        weights = np.array(
+            [w for _, _, w in och]
+        )
+
         k = min(vol, len(coords))
-        kmeans = KMeans(n_clusters=k, random_state=0, n_init=10)
-        labels = kmeans.fit_predict(coords, sample_weight=vesaw)
+
+        kmeans = KMeans(
+            n_clusters=k,
+            random_state=0,
+            n_init=20
+        )
+
+        labels = kmeans.fit_predict(
+            coords,
+            sample_weight=weights
+        )
+
         clust = [[] for _ in range(k)]
+
         for idx, lb in enumerate(labels):
             clust[lb].append(och[idx])
-        def cluster_cost(cluster):
-            if len(cluster) < 2:
-                return 0
-            pts = np.array([to_xy(lat, lon) for lat, lon, _ in cluster])
-            center = pts.mean(axis=0)
-            return np.sum(np.linalg.norm(pts - center, axis=1))
-        for _ in range(10):
-            costs = [cluster_cost(c) for c in clust]
-            hi = int(np.argmax(costs))
-            lo = int(np.argmin(costs))
-            if costs[hi] - costs[lo] < 50:
+        target_size = len(och) / k
+
+        for _ in range(30):
+
+            sizes = [len(c) for c in clust]
+
+            biggest = np.argmax(sizes)
+            smallest = np.argmin(sizes)
+
+            if sizes[biggest] - sizes[smallest] <= 1:
                 break
-            if len(clust[hi]) <= 1:
-                break
-            hi_pts = clust[hi]
-            center = np.mean([to_xy(lat, lon) for lat, lon, _ in hi_pts], axis=0)
-            dists = [
-                (i, np.linalg.norm(np.array(to_xy(lat, lon)) - center))
-                for i, (lat, lon, _) in enumerate(hi_pts)
-            ]
-            idx_move = max(dists, key=lambda x: x[1])[0]
-            clust[lo].append(clust[hi].pop(idx_move))
+
+            center_small = np.mean(
+                [
+                    to_xy(lat, lon)
+                    for lat, lon, _ in clust[smallest]
+                ],
+                axis=0
+            )
+
+            pts = clust[biggest]
+
+            dists = []
+
+            for idx, (lat, lon, w) in enumerate(pts):
+
+                d = np.linalg.norm(
+                    np.array(to_xy(lat, lon))
+                    - center_small
+                )
+
+                dists.append((idx, d))
+
+            move_idx = min(dists, key=lambda x: x[1])[0]
+
+            clust[smallest].append(
+                clust[biggest].pop(move_idx)
+            )
 
     marsh = [[] for _ in range(vol)]
     for agent_id, points in enumerate(clust):
@@ -507,50 +617,53 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         nodes = list(set(nodes))
         if not nodes:
             continue
-        cluster_center = np.mean([[lat, lon] for lat, lon, _ in points], axis=0)
-        komm_nodes = [ox.distance.nearest_nodes(G, cluster_center[1], cluster_center[0])] + nodes
-        n = len(komm_nodes)
-        dist = [[float('inf')] * n for _ in range(n)]
-        all_lengths = {}
-        for u in komm_nodes:
-            all_lengths[u] = nx.single_source_dijkstra_path_length(G, u, cutoff=2500, weight="length")
-        for i, u in enumerate(komm_nodes):
-            for j, v in enumerate(komm_nodes):
-                if v in all_lengths[u]:
-                    dist[i][j] = all_lengths[u][v]
-        nepose = set(range(1, n))
-        tour = [0]
-        cur = 0
-        while nepose:
-            nxt = min(nepose, key=lambda j: dist[cur][j])
-            tour.append(nxt)
-            nepose.remove(nxt)
-            cur = nxt
-        def dlin(t):
-            return sum(dist[t[i]][t[i+1]] for i in range(len(t)-1))
-        luchs = True
-        while luchs:
-            luchs = False
-            for i in range(len(tour) - 2):
-                for j in range(i + 2, len(tour)):
-                    new_tour = tour[:i] + tour[i:j][::-1] + tour[j:]
-                    if dlin(new_tour) < dlin(tour):
-                        tour = new_tour
-                        luchs = True
-                        break
-                if luchs:
-                    break
+        node_coords = []
+
+        for node in nodes:
+
+            node_coords.append(
+                (
+                    G.nodes[node]["x"],
+                    G.nodes[node]["y"]
+                )
+            )
+
+        if len(node_coords) <= 1:
+
+            order = list(range(len(node_coords)))
+
+        else:
+
+            order = greedy_tsp(node_coords)
+
+            order = two_opt(
+                order,
+                node_coords
+            )
+
+        ordered_nodes = [
+            nodes[i]
+            for i in order
+        ]
         cur = start
-        for idx in tour[1:]:
-            target = komm_nodes[idx]
+
+        for target in ordered_nodes:
+
             try:
-                path = nx.shortest_path(G, cur, target, weight="length")
+
+                path = nx.shortest_path(
+                    G,
+                    cur,
+                    target,
+                    weight="length"
+                )
+
                 marsh[agent_id].extend(path)
+
                 cur = target
+
             except:
                 continue
-        if not marsh[agent_id]:
-            marsh[agent_id] = [start]
 
     m = folium.Map(location=[shir, dolg], zoom_start=15)
     kartan = m.get_name()
