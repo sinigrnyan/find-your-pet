@@ -3,42 +3,118 @@
 <head>
     <title>Поиск пропавших питомцев</title>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 <style>
-    html, body {
-        height: 100%;
-        margin: 0;
-        font-family: Arial;
-    }
-    #map {
-        height: 100%;
-        width: 100%;
-    }
+html, body {
+    height: 100%;
+    margin: 0;
+    font-family: Arial, sans-serif;
+    font-size: 18px;
+}
+
+#map {
+    height: 100%;
+    width: 100%;
+}
+
+.panel {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(240,240,240,0.97);
+    padding: 15px;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+    z-index: 1000;
+}
+
+.help {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 300px;
+    background: rgba(255,255,255,0.97);
+    padding: 12px;
+    border-radius: 12px;
+    font-size: 15px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+    z-index: 1000;
+}
+
+.panel input,
+.panel select,
+.panel button {
+    font-size: 18px;
+    padding: 10px;
+    margin: 4px;
+}
+
+.panel button {
+    min-height: 48px;
+}
+
+textarea {
+    font-size: 18px;
+    width: 95%;
+    min-height: 100px;
+}
+
+@media (max-width: 768px) {
+
     .panel {
-        position: absolute;
-        bottom: 10px;
+        width: 95%;
         left: 50%;
+        bottom: 5px;
         transform: translateX(-50%);
-        background: rgba(240,240,240,0.95);
-        padding: 10px 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        z-index: 1000;
+        font-size: 20px;
+        padding: 15px;
+        max-height: 45vh;
+        overflow-y: auto;
     }
+
+    .panel input,
+    .panel select,
+    .panel button {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 20px;
+        min-height: 55px;
+        margin-top: 6px;
+    }
+
     .help {
-        position: absolute;
-        top: 10px;
+        width: calc(100% - 20px);
         right: 10px;
-        width: 260px;
-        background: rgba(255,255,255,0.95);
-        padding: 10px;
-        border-radius: 10px;
-        font-size: 13px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        z-index: 1000;
+        left: 10px;
+        top: 10px;
+        font-size: 17px;
+        max-height: 25vh;
+        overflow-y: auto;
     }
+
+    textarea {
+        width: 100%;
+        min-height: 120px;
+        font-size: 18px;
+    }
+
+    .leaflet-popup-content {
+        font-size: 18px;
+    }
+
+    .leaflet-popup-content button,
+    .leaflet-popup-content select,
+    .leaflet-popup-content input {
+        font-size: 18px;
+        min-height: 45px;
+        width: 100%;
+        box-sizing: border-box;
+    }
+}
 </style>
 </head>
 
@@ -82,6 +158,18 @@ let markersLayer = null;
 var map = L.map('map').setView([59.8814, 29.8301], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OpenStreetMap'}).addTo(map);
 setTimeout(() => {map.invalidateSize();}, 200);
+if (window.innerWidth < 768) {
+    const style = document.createElement("style");
+    style.innerHTML = `
+        .leaflet-control-zoom a {
+            width: 48px !important;
+            height: 48px !important;
+            line-height: 48px !important;
+            font-size: 28px !important;
+        }
+    `;
+    document.head.appendChild(style);
+}
 map.on("click", function(e) {
     selectedLat = e.latlng.lat;
     selectedLon = e.latlng.lng;
@@ -203,7 +291,7 @@ function loadObservations() {
             else if (o.status === "yellow") color = "orange";
             let popup = `<b>${o.created_at}</b><br>${o.text || ""}`;
             let marker = L.circleMarker([o.lat, o.lon], {
-                radius: 10,
+                radius: window.innerWidth < 768 ? 16 : 10,
                 color: "black",
                 weight: 2,
                 fillColor: color,

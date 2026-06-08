@@ -15,6 +15,7 @@ from shapely.prepared import prep
 from functools import lru_cache
 from shapely.vectorized import contains
 from scipy.spatial.distance import cdist
+import time
 
 env_cache = {}
 node_cache = {}
@@ -24,83 +25,59 @@ def euclid(a, b):
 
 
 def greedy_tsp(points):
-    """
-    points = [(x,y), ...]
-    возвращает порядок обхода
-    """
-
     if len(points) <= 1:
         return list(range(len(points)))
-
     unvisited = set(range(1, len(points)))
     route = [0]
     cur = 0
-
     while unvisited:
         nxt = min(
             unvisited,
             key=lambda i: euclid(points[cur], points[i])
         )
-
         route.append(nxt)
         unvisited.remove(nxt)
         cur = nxt
-
     return route
 
 
 def route_length(route, points):
-
     total = 0
-
     for i in range(len(route)-1):
         total += euclid(
             points[route[i]],
             points[route[i+1]]
         )
-
     return total
 
 
 def two_opt(route, points):
-
     improved = True
-
     while improved:
-
         improved = False
-
         best_len = route_length(route, points)
-
         for i in range(1, len(route)-2):
-
             for j in range(i+1, len(route)):
-
                 candidate = (
                     route[:i]
                     + route[i:j+1][::-1]
                     + route[j+1:]
                 )
-
                 cand_len = route_length(
                     candidate,
                     points
                 )
-
                 if cand_len < best_len:
-
                     route = candidate
                     best_len = cand_len
                     improved = True
-
         if not improved:
             break
-
     return route
 pov = {
     ("koshka", "truslivaya"): {"P_STAY": 0.18, "P_RETURN": 0.06, "MAX_STEP": 50.0, "EDGE_SCALE": 30.0, "AVOID_MAJOR_ROADS": True},
-    ("koshka", "uverennaya"): {"P_STAY": 0.08, "P_RETURN": 0.03, "MAX_STEP": 80.0, "EDGE_SCALE": 55.0, "AVOID_MAJOR_ROADS": True},
-    ("sobaka", "truslivaya"): {"P_STAY": 0.06, "P_RETURN": 0.03, "MAX_STEP": 90.0, "EDGE_SCALE": 70.0, "AVOID_MAJOR_ROADS": True},
+    ("koshka", "uverennaya"): {"P_STAY": 0.08, "P_RETURN": 0.03, "MAX_STEP": 80.0, "EDGE_SCALE": 60.0, "AVOID_MAJOR_ROADS": True},
+    ("sobaka", "truslivaya"): {"P_STAY": 0.06, "P_RETURN": 0.03, "MAX_STEP": 90.0, "EDGE_SCALE": 55.0, "AVOID_MAJOR_ROADS": True},
     ("sobaka", "uverennaya"): {"P_STAY": 0.02, "P_RETURN": 0.01, "MAX_STEP": 150.0, "EDGE_SCALE": 120.0, "AVOID_MAJOR_ROADS": False}
 }
 ox.settings.use_cache = True
@@ -151,11 +128,15 @@ def load_osm_cached(lat_key, lon_key, rad_key):
 
 def generate_map(zhiv, khar, shir, dolg, rad, vol):
     global env_cache, node_cache
+    full_t0 = time.perf_counter()
+    profile = {
+        "is_valid": 0,
+        "is_path_valid": 0
+    }
     env_cache = {}
     node_cache = {}
     conf = pov[(zhiv, khar)]
     rng = random.Random(228)
-
     def to_xy(lat, lon):
         x = (lon - dolg) * 111320.0 * math.cos(math.radians(shir))
         y = (lat - shir) * 111320.0
@@ -167,7 +148,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         return lat, lon
 
     def is_valid(x, y):
-
+        profile["is_valid"] += 1
         dist_from_center = math.hypot(x, y)
 
         if dist_from_center > rad:
@@ -183,7 +164,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         return free_mask[gy, gx] == 1
 
     def is_path_valid(x1, y1, x2, y2):
-
+        profile["is_path_valid"] += 1
         dist = math.hypot(x2 - x1, y2 - y1)
 
         steps = max(10, int(dist / 5))
@@ -220,19 +201,14 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             return env_cache[key]
 
         score = 1.0
-
         if walkable_mask[gy, gx]:
             score *= 1.4 + 0.3 * stress
-
         if res_mask[gy, gx]:
             score *= 1.6
-
         if parking_mask[gy, gx]:
             score *= 1.2 + golod
-
         if roads_mask[gy, gx]:
             score *= max(0.3, 1.0 - stress * 1.5)
-
         env_cache[key] = score
 
         return score
@@ -301,15 +277,30 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
 
             if zhiv1 == "sobaka" and khar1 == "uverennaya":
-                explore_bonus = 2.8
+                explore_bonus = 2.5
             elif zhiv1 == "sobaka":
-                explore_bonus = 1.8
+                explore_bonus = 1.7
             elif khar1 == "uverennaya":
-                explore_bonus = 1.4
+                explore_bonus = 1.5
             else:
                 explore_bonus = 0.7
 
-            issled = 1.0 + (d / rad) * explore_bonus
+            r = d / rad
+
+            if r < 0.5:
+                issled = 1.0 + r * explore_bonus
+
+            elif r < 0.8:
+                issled = 1.0 + 0.5 * explore_bonus
+
+            else:
+                edge_penalty = 1.0 - (r - 0.8) / 0.2
+                edge_penalty = max(0.3, edge_penalty)
+
+                issled = (
+                    1.0 +
+                    0.5 * explore_bonus
+                ) * edge_penalty
 
             golod_drive = 1.0 + golod
 
@@ -342,13 +333,19 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     lat_key = round(shir, 3)
     lon_key = round(dolg, 3)
     rad_key = int(rad)
-
+    t0 = time.perf_counter()
     G, gdf = load_osm_cached(
         lat_key,
         lon_key,
         rad_key
     )
-
+    print(
+        f"[PROFILE] OSM load: "
+        f"{time.perf_counter()-t0:.3f}s "
+        f"(nodes={len(G.nodes)}, "
+        f"edges={len(G.edges)}, "
+        f"objects={len(gdf)})"
+    )
     start = ox.distance.nearest_nodes(G, dolg, shir)
     for col in ["landuse", "natural", "leisure", "highway", "amenity"]:
         if col not in gdf.columns:
@@ -363,6 +360,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         gdf["landuse"].isin(["industrial", "commercial"]) |
         (gdf["building"].notna())
     ]
+    t0 = time.perf_counter()
     walkable_geom = unary_union(walkable.geometry) if not walkable.empty else None
     blocked_geom = unary_union(blocked.geometry) if not blocked.empty else None
     walkable_union = prep(walkable_geom) if walkable_geom else None
@@ -376,17 +374,26 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     res_union = prep(res_geom) if res_geom else None
     parking_union = prep(parking_geom) if parking_geom else None
     roads_union = prep(roads_geom) if roads_geom else None
-    GRID_RES = 6.0
+    print(
+        f"[PROFILE] unary_union: "
+        f"{time.perf_counter()-t0:.3f}s"
+    )
+    GRID_RES = 8.0
 
     xmin = -rad
     xmax = rad
     ymin = -rad
     ymax = rad
-
+    t0 = time.perf_counter()
     xs = np.arange(xmin, xmax, GRID_RES)
     ys = np.arange(ymin, ymax, GRID_RES)
 
     xx, yy = np.meshgrid(xs, ys)
+    print(
+        f"[PROFILE] grid build: "
+        f"{time.perf_counter()-t0:.3f}s "
+        f"shape={xx.shape}"
+    )
 
     lon_grid = dolg + xx / (111320.0 * math.cos(math.radians(shir)))
     lat_grid = shir + yy / 111320.0
@@ -396,7 +403,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     roads_mask = np.zeros(xx.shape, dtype=np.uint8)
     res_mask = np.zeros(xx.shape, dtype=np.uint8)
     parking_mask = np.zeros(xx.shape, dtype=np.uint8)
-
+    t0 = time.perf_counter()
     if walkable_geom:
         walkable_mask[contains(walkable_geom, lon_grid, lat_grid)] = 1
 
@@ -417,7 +424,10 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         )
 
         free_mask[blocked_mask] = 0
-
+    print(
+        f"[PROFILE] masks build: "
+        f"{time.perf_counter()-t0:.3f}s"
+    )
     def grid_index(x, y):
 
         gx = int((x - xmin) / GRID_RES)
@@ -433,6 +443,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             return None
 
         return gx, gy
+    sim_t0 = time.perf_counter()
     vis = []
     t_global = 0
     GOLOD_MAX = 1.0
@@ -441,7 +452,7 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
     STRESS_UPAD = 0.01
     SHUM_STRESS = 0.05
 
-    for _ in range(1500):
+    for _ in range(750):
         cur = start_xy
         ugl = rng.uniform(0, 2*math.pi)
         golod = rng.uniform(0.2, 0.4)
@@ -476,7 +487,11 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             vis.append((cur[0], cur[1], t_global))
             golod = min(GOLOD_MAX, golod + GOLOD_GROWTH)
             t_global = t_global + 1
-
+    print(
+        f"[PROFILE] simulation: "
+        f"{time.perf_counter()-sim_t0:.3f}s "
+        f"vis={len(vis)}"
+    )
     grid = defaultdict(float)
     cell = 1
     T = vis[-1][2] + 1 if vis else 1
@@ -490,17 +505,24 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
 
         if zhiv == "sobaka" and khar == "uverennaya":
 
-            dist_bonus = 1.0 + (dist_from_home / rad) * 2.5
+            dist_bonus = 1.0 + (dist_from_home / rad) * 2.0
 
-        elif zhiv == "sobaka":
+        elif zhiv == "sobaka" and khar == "truslivaya":
 
-            dist_bonus = 1.0 + (dist_from_home / rad)
+            dist_bonus = max(
+                0.5,
+                1.0 - (dist_from_home / rad) * 0.4
+            )
+
+        elif zhiv == "koshka" and khar == "uverennaya":
+
+            dist_bonus = 1.0 + (dist_from_home / rad) * 1.2
 
         else:
 
             dist_bonus = max(
                 0.2,
-                1.0 - (dist_from_home / rad) * 0.8
+                1.0 - (dist_from_home / rad)
             )
 
         w = (
@@ -533,7 +555,53 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         for lat, lon, w in heat
         if w >= hot_threshold
     ]
+    if len(och) > 0:
 
+        # Чем больше радиус поиска,
+        # тем крупнее ячейка объединения
+
+        MERGE_CELL = max(
+            10,          # минимум 40 м
+            rad / 6     # растёт вместе с радиусом
+        )
+
+        clusters = defaultdict(list)
+
+        for lat, lon, w in och:
+
+            x, y = to_xy(lat, lon)
+
+            gx = int(x // MERGE_CELL)
+            gy = int(y // MERGE_CELL)
+
+            clusters[(gx, gy)].append(
+                (lat, lon, w)
+            )
+
+        och_new = []
+
+        for pts in clusters.values():
+
+            mean_lat = np.mean([p[0] for p in pts])
+            mean_lon = np.mean([p[1] for p in pts])
+
+            mean_w = np.mean([p[2] for p in pts])
+
+            och_new.append(
+                (
+                    mean_lat,
+                    mean_lon,
+                    mean_w
+                )
+            )
+
+        print(
+            f"[PROFILE] hotpoints reduce: "
+            f"{len(och)} -> {len(och_new)}"
+        )
+
+        och = och_new
+    t0 = time.perf_counter()
     if len(och) == 0:
 
         clust = [[] for _ in range(vol)]
@@ -599,8 +667,15 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             clust[best_cluster].append(och[idx])
 
             assigned_routes[best_cluster].append(point)
-
+    print(
+        f"[PROFILE] clustering: "
+        f"{time.perf_counter()-t0:.3f}s "
+        f"hot_points={len(och)}"
+    )
     marsh = [[] for _ in range(vol)]
+    nearest_time = 0
+    routing_time = 0
+    routing_calls = 0
     for agent_id, points in enumerate(clust):
         nodes = []
         for lat, lon, _ in points:
@@ -609,7 +684,11 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
                 if key in node_cache:
                     node = node_cache[key]
                 else:
+                    t1 = time.perf_counter()
                     node = ox.distance.nearest_nodes(G, lon, lat)
+                    nearest_time += (
+                        time.perf_counter() - t1
+                    )
                     node_cache[key] = node
                 nodes.append(node)
             except:
@@ -633,12 +712,17 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             order = list(range(len(node_coords)))
 
         else:
-
+            t1 = time.perf_counter()
             order = greedy_tsp(node_coords)
 
             order = two_opt(
                 order,
                 node_coords
+            )
+            print(
+                f"[PROFILE] tsp: "
+                f"{time.perf_counter()-t1:.3f}s "
+                f"nodes={len(node_coords)}"
             )
 
         ordered_nodes = [
@@ -684,25 +768,35 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
         else:
 
             cur = start
-
         for target in ordered_nodes:
 
             try:
-
+                t1 = time.perf_counter()
                 path = nx.shortest_path(
                     G,
                     cur,
                     target,
                     weight="length"
                 )
-
+                routing_time += (
+                    time.perf_counter() - t1
+                )
+                routing_calls += 1
                 marsh[agent_id].extend(path)
 
                 cur = target
 
             except:
                 continue
-
+    print(
+        f"[PROFILE] nearest_nodes: "
+        f"{nearest_time:.3f}s"
+    )
+    print(
+        f"[PROFILE] shortest_path: "
+        f"{routing_time:.3f}s "
+        f"calls={routing_calls}"
+    )
     m = folium.Map(location=[shir, dolg], zoom_start=15)
     kartan = m.get_name()
     HeatMap(heat,radius=12,blur=10,min_opacity=0.2, gradient={0.2: "blue",0.4: "lime",0.6: "yellow",0.8: "orange",1.0: "red"}).add_to(m)
@@ -721,7 +815,15 @@ def generate_map(zhiv, khar, shir, dolg, rad, vol):
             continue
         coords = [(G.nodes[n]['y'], G.nodes[n]['x']) for n in put]
         rex.append(coords)
-
+    print(
+        "[PROFILE] "
+        f"is_valid={profile['is_valid']:,} "
+        f"is_path_valid={profile['is_path_valid']:,}"
+    )
+    print(
+        f"[PROFILE] TOTAL: "
+        f"{time.perf_counter()-full_t0:.3f}s"
+    )
     return {
         "heat": heat,
         "routes": rex,
